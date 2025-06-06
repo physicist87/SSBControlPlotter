@@ -13,10 +13,10 @@ HIST_CONFIG="HistConfig.txt"
 OUTPUT_DIR="NanoAOD_v1/UL2018/MuMu"
 OUTPUT_DIR="NanoAOD_v1p2/UL2018/MuMu"
 OUTPUT_DIR="NanoAOD_v1/UL2016PreVFP/MuMu"
-LUMI_TEXT="UL 2018 13 TeV"  # 루미노시티 텍스트 추가
-LUMI_TEXT="UL 2016APV 13 TeV"  # 루미노시티 텍스트 추가
-LUMI_TEXT="59.83 fb^{-1} (13 TeV)"  # 루미노시티 텍스트 추가
-LUMI_TEXT="19.65 fb^{-1} (13 TeV)"  # 루미노시티 텍스트 추가
+LUMI_TEXT="UL 2018 13 TeV"        # Add luminosity text
+LUMI_TEXT="UL 2016APV 13 TeV"     # Add luminosity text
+LUMI_TEXT="59.83 fb^{-1} (13 TeV)" # Add luminosity text 2018
+LUMI_TEXT="19.65 fb^{-1} (13 TeV)" # Add luminosity text 2016 PreVFP
 
 # Run the executable with the provided arguments
 echo $EXEC $INPUT_LIST $COLOR_CONFIG $SCALE_CONFIG $OUTPUT_DIR \"$LUMI_TEXT\"
