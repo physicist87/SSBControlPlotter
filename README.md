@@ -177,7 +177,7 @@ python3 run_analysis.py
 | Suffix | Selection Stage (EN) | 셀렉션 단계 (KR) | DYSF Key |
 |--------|---------------------|-----------------|----------|
 | `_0`   | No selection        | 셀렉션 없음      | 1.0 (fixed) |
-| `_1`, `_2` | Dilepton selection | 딜렙톤 셀렉션 | Dilepton |
+| `_1`, `_2` | Dilepton selection | Dilepton 셀렉션 | Dilepton |
 | `_3`, `_4` | ≥ 2 jets          | 제트 ≥ 2       | ≥ 2 jets |
 | `_5` ~ `_9` | ≥ 1 b-tag        | b-태그 ≥ 1     | ≥ 1 b-tag |
 | none   | Suffix-less (h_Toppt, h_Reco_CPO*, ...) | Suffix 없음 | ≥ 1 b-tag |
