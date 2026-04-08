@@ -42,17 +42,17 @@ ControlPlots/
 ├── DYSF_Run2UL.txt                 # DY scale factors (input for generator)
 │
 ├── ScaleConfig/                    # Per-RunPeriod/Channel ScaleConfig files
-│   └── AN_v6p2-13/
+│   └── AN_v6p4/
 │       └── {RunPeriod}/{Channel}/
 │           └── ScaleConfig_{STUDYNAME}_{RunPeriod}_{Channel}.txt
 │
 ├── input/                          # Input ROOT file lists
-│   └── AN_v6p2-13/
+│   └── AN_v6p4/
 │       └── {RunPeriod}/{Channel}/
-│           └── AN_v6p2-13_{RunPeriod}_{Channel}.list
+│           └── AN_v6p4_{RunPeriod}_{Channel}.list
 │
 └── Histograms/                     # Output plots (auto-created)
-    └── AN_v6p2-13_DYEstApplied_Category/
+    └── AN_v6p4_DYEstApplied_Category/
         └── {RunPeriod}/{Channel}/
             └── {histName}_Log.pdf / _Log.png / _Linear.pdf / _Linear.png
 ```
@@ -140,7 +140,7 @@ make -f Makefile
 python3 Generate_ScaleConfig_From_DYSF.py
 ```
 
-Output: `ScaleConfig/AN_v6p2-13/{RunPeriod}/{Channel}/ScaleConfig_*.txt` (12 files total)
+Output: `ScaleConfig/AN_v6p4/{RunPeriod}/{Channel}/ScaleConfig_*.txt` (12 files total)
 
 ### Step 3 — Run analysis / 분석 실행
 
