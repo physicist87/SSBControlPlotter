@@ -1,0 +1,54 @@
+# ScaleConfig for UL2017 MuMu
+# Generated from DYSF_Run2UL.txt
+#
+# Format:
+#   Non-DY:  <SampleName>  <SF>
+#   DY:      DY  <step|*>  <SF>   (step * = suffix-less histograms)
+#
+# Step mapping:
+#   step 0    -> 1.0 (no selection)
+#   step 1,2  -> Dilepton
+#   step 3,4  -> >= 2 jets
+#   step 5~9  -> >= 1 b-tag
+#   step *    -> >= 1 b-tag (suffix-less: h_Toppt, h_Reco_CPO*, ...)
+#
+# Non-DY samples
+Data                                                     1.0
+TTbar_Signal                                             1.0
+TTbar_AllHadronic                                        1.0
+TTbar_AllHadron                                          1.0
+TTbar_SemiLeptonic                                       1.0
+TTbar_SemiLepton                                         1.0
+ST_t-channel_top_4f_InclusiveDecays                      1.0
+ST_t-channel_antitop_4f_InclusiveDecays                  1.0
+ST_tW_top_5f_NoFullyHadronicDecays                       1.0
+ST_tW_top_5f_DS_NoFullyHadronicDecays                    1.0
+ST_tW_antitop_5f_NoFullyHadronicDecays                   1.0
+ST_tW_antitop_5f_DS_NoFullyHadronicDecays                1.0
+ST_s-channel_4f_leptonDecays                             1.0
+TTZToQQ                                                  1.0
+TTZToLLNuNu                                              1.0
+TTZToLLNuNu_M-10                                         1.0
+TTWJetsToLNu                                             1.0
+TTWJetsToQQ                                              1.0
+WJetsToLNu                                               1.0
+WW                                                       1.0
+WZ                                                       1.0
+ZZ                                                       1.0
+#
+# DY step-wise SF (UL2017 MuMu)
+# 1.0 (fixed)
+DY  0     1.000000  # sf_err=0.000000
+# Dilepton
+DY  1     1.029441  # sf_err=0.002043
+DY  2     1.029441  # sf_err=0.002043
+# >= 2 jets
+DY  3     1.051814  # sf_err=0.013805
+DY  4     1.051814  # sf_err=0.013805
+# >= 1 b-tag
+DY  5     1.301913  # sf_err=0.094158
+DY  6     1.301913  # sf_err=0.094158
+DY  7     1.301913  # sf_err=0.094158
+DY  8     1.301913  # sf_err=0.094158
+DY  9     1.301913  # sf_err=0.094158
+DY  *     1.301913  # sf_err=0.094158
