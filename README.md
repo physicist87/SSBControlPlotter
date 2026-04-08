@@ -178,8 +178,9 @@ python3 run_analysis.py
 |--------|---------------------|-----------------|----------|
 | `_0`   | No selection        | 셀렉션 없음      | 1.0 (fixed) |
 | `_1`, `_2` | Dilepton selection | Dilepton 셀렉션 | Dilepton |
-| `_3`, `_4` | ≥ 2 jets          | 제트 ≥ 2       | ≥ 2 jets |
-| `_5` ~ `_9` | ≥ 1 b-tag        | b-태그 ≥ 1     | ≥ 1 b-tag |
+| `_3`, `_4` | ≥ 2 jets          | 제트 ≥ 2        | ≥ 2 jets |
+| `_5`   | ≥ 1 b-tag           | b-태그 ≥ 1      | ≥ 1 b-tag |
+| `_8`   | Top reconstruction (kinematic solver) | Top 재건 (kinematic solver) | ≥ 1 b-tag |
 | none   | Suffix-less (h_Toppt, h_Reco_CPO*, ...) | Suffix 없음 | ≥ 1 b-tag |
 
 **EN:** To regenerate ScaleConfig files after updating `DYSF_Run2UL.txt`, simply re-run `Generate_ScaleConfig_From_DYSF.py`.
