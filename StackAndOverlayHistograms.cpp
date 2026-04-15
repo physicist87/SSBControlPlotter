@@ -354,20 +354,45 @@ void writeEventYieldTable(
     const std::map<std::string, std::map<std::string, std::unique_ptr<TH1>>> &histograms,
     const std::map<std::string, std::unique_ptr<TH1>> &dataHistograms)
 {
-    // Build categoryHistograms internally (same logic as main processing)
-    std::map<std::string, std::map<std::string, double>> catYield;   // cat -> stepStr -> yield
-    std::map<std::string, std::map<std::string, double>> smpYield;   // sample -> stepStr -> yield
-    std::map<std::string, double>                         dataYield;  // stepStr -> yield
+    // Each entry stores { yield, stat_error }
+    struct YE {
+        double yield = 0;
+        double err2  = 0;    // accumulated squared error (for MC: Sumw2, for Data: N)
+        double err   = 0;    // sqrt(err2), filled after accumulation
+    };
+
+    std::map<std::string, std::map<std::string, YE>> catYE;   // category -> stepStr -> YE
+    std::map<std::string, std::map<std::string, YE>> smpYE;   // sample   -> stepStr -> YE
+    std::map<std::string, YE>                         dataYE;  // stepStr  -> YE
 
     // Step keys: *, 0, 1, ..., 8
     std::vector<std::string> stepKeys;
     stepKeys.push_back("*");
     for (int s = 0; s <= 8; ++s) stepKeys.push_back(std::to_string(s));
 
-    // Build lookup: stepStr -> histogram name
     auto stepToHistName = [](const std::string &step) -> std::string {
         if (step == "*") return "h_Num_PV";
         return "h_Num_PV_" + step;
+    };
+
+    // Helper: integrate TH1 and compute stat error via Sumw2
+    // Returns {integral, sqrt(sum of bin_error^2)} over all bins including overflow
+    auto integrateWithError = [](TH1 *h, bool isData) -> std::pair<double,double> {
+        double yield = 0, err2 = 0;
+        int nBins = h->GetNbinsX();
+        for (int b = 0; b <= nBins + 1; ++b) {  // include underflow/overflow
+            double w = h->GetBinContent(b);
+            yield += w;
+            if (isData) {
+                // weight=1 per event → Poisson: σ² = N
+                err2 += w;
+            } else {
+                // MC with Sumw2: σ² = Σ w²  (stored in bin error as sqrt)
+                double e = h->GetBinError(b);
+                err2 += e * e;
+            }
+        }
+        return {yield, std::sqrt(err2)};
     };
 
     // Collect MC yields per sample and per category
@@ -380,27 +405,30 @@ void writeEventYieldTable(
             auto it = samplePair.second.find(hname);
             if (it == samplePair.second.end()) continue;
 
-            double integral = it->second->Integral();
-            smpYield[sampleName][step] += integral;
-            catYield[category][step]   += integral;
+            auto [y, e] = integrateWithError(it->second.get(), false);
+            smpYE[sampleName][step].yield += y;
+            smpYE[sampleName][step].err2  += e * e;   // add in quadrature across channels
+            catYE[category][step].yield   += y;
+            catYE[category][step].err2    += e * e;
         }
     }
 
-    // Collect Data yields
+    // Collect Data yields (weight=1 → Poisson)
     for (const std::string &step : stepKeys) {
         std::string hname = stepToHistName(step);
         auto it = dataHistograms.find(hname);
         if (it == dataHistograms.end()) continue;
-        dataYield[step] = it->second->Integral();
+        auto [y, e] = integrateWithError(it->second.get(), true);
+        dataYE[step] = {y, e*e, e};
     }
 
-    // Determine which steps actually have data (at least one non-zero MC entry)
+    // Determine active steps
     std::vector<std::string> activeSteps;
     for (const std::string &step : stepKeys) {
         bool found = false;
-        for (const auto &samplePair : smpYield) {
-            auto it = samplePair.second.find(step);
-            if (it != samplePair.second.end() && it->second > 0) { found = true; break; }
+        for (const auto &sp : smpYE) {
+            auto it = sp.second.find(step);
+            if (it != sp.second.end() && it->second.yield > 0) { found = true; break; }
         }
         if (found) activeSteps.push_back(step);
     }
@@ -411,37 +439,60 @@ void writeEventYieldTable(
 
     // Ordered category list
     std::vector<std::pair<int,std::string>> catOrder;
-    for (const auto &cp : catYield) catOrder.push_back({getCategoryOrder(cp.first), cp.first});
+    for (const auto &cp : catYE) catOrder.push_back({getCategoryOrder(cp.first), cp.first});
     std::sort(catOrder.begin(), catOrder.end());
     std::vector<std::string> orderedCats;
     for (const auto &op : catOrder) orderedCats.push_back(op.second);
 
-    // Ordered sample list (same order as individual mode: reversed map order)
+    // Ordered sample list
     std::vector<std::string> orderedSamples;
-    for (const auto &sp : smpYield) orderedSamples.push_back(sp.first);
+    for (const auto &sp : smpYE) orderedSamples.push_back(sp.first);
     std::reverse(orderedSamples.begin(), orderedSamples.end());
 
-    // Helper: format a double for the table
-    auto fmt = [](double v) -> std::string {
+    // Helper: format yield value
+    auto fmtVal = [](double v) -> std::string {
         char buf[64];
-        if (v >= 1e6)       snprintf(buf, sizeof(buf), "%.0f", v);
-        else if (v >= 1e3)  snprintf(buf, sizeof(buf), "%.1f", v);
-        else if (v >= 1.)   snprintf(buf, sizeof(buf), "%.2f", v);
-        else                snprintf(buf, sizeof(buf), "%.4f", v);
+        if (v >= 1e6)      snprintf(buf, sizeof(buf), "%.0f", v);
+        else if (v >= 1e3) snprintf(buf, sizeof(buf), "%.1f", v);
+        else if (v >= 1.)  snprintf(buf, sizeof(buf), "%.2f", v);
+        else               snprintf(buf, sizeof(buf), "%.4f", v);
         return std::string(buf);
     };
 
-    // Helper: step label for display
+    // Helper: format "yield ± error"
+    auto fmtYE = [&](double y, double e) -> std::string {
+        return fmtVal(y) + " +/- " + fmtVal(e);
+    };
+
+    // Helper: format Data/MC ratio with propagated error
+    // ratio = D/M,  σ_ratio = ratio * sqrt( (σ_D/D)² + (σ_M/M)² )
+    auto fmtRatio = [](double d, double sd, double m, double sm) -> std::string {
+        if (m <= 0) return "N/A";
+        double ratio = d / m;
+        double relD  = (d > 0) ? sd / d : 0;
+        double relM  = (m > 0) ? sm / m : 0;
+        double serr  = ratio * std::sqrt(relD*relD + relM*relM);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.4f +/- %.4f", ratio, serr);
+        return std::string(buf);
+    };
+
+    // Step label
     auto stepLabel = [](const std::string &step) -> std::string {
         if (step == "*") return "No suffix";
         return "Step " + step;
     };
 
-    // Column width
-    const int colW = 14;
-    auto padStr = [&](const std::string &s) -> std::string {
+    // Column width: "yield +/- error" needs more space
+    const int colW  = 26;   // wide enough for "123456.7 +/- 1234.5"
+    const int labelW = 22;  // process name column
+    auto padCol = [&](const std::string &s) -> std::string {
         if ((int)s.size() >= colW) return s + "  ";
         return s + std::string(colW - s.size(), ' ');
+    };
+    auto padLabel = [&](const std::string &s) -> std::string {
+        if ((int)s.size() >= labelW) return s + "  ";
+        return s + std::string(labelW - s.size(), ' ');
     };
 
     std::string yieldPath = "Histograms/" + outputDir + "/EventYield.txt";
@@ -451,135 +502,110 @@ void writeEventYieldTable(
         return;
     }
 
+    // Reusable lambda: print one section (category or sample)
+    // processNames: ordered list of row labels
+    // yieldMap:     processName -> stepStr -> YE
+    auto printSection = [&](
+        const std::string &title,
+        const std::vector<std::string> &processNames,
+        std::map<std::string, std::map<std::string, YE>> &yieldMap)
+    {
+        out << "=== " << title << " ===" << std::endl;
+        out << std::endl;
+
+        // Pre-compute BG total (MC Total - TTbar_Signal) + error per step
+        struct TotYE { double y = 0; double err2 = 0; };
+        std::map<std::string, TotYE> mcTot;
+        std::map<std::string, TotYE> bgTot;
+        for (const std::string &step : activeSteps) {
+            for (const std::string &proc : processNames) {
+                auto it = yieldMap[proc].find(step);
+                if (it == yieldMap[proc].end()) continue;
+                mcTot[step].y    += it->second.yield;
+                mcTot[step].err2 += it->second.err2;
+                // BG = all except TTbar_Signal
+                if (proc != "TTbar_Signal") {
+                    bgTot[step].y    += it->second.yield;
+                    bgTot[step].err2 += it->second.err2;
+                }
+            }
+        }
+
+        // Header
+        out << padLabel("Process");
+        for (const std::string &step : activeSteps) out << padCol(stepLabel(step));
+        out << std::endl;
+        out << std::string(labelW + activeSteps.size() * colW, '-') << std::endl;
+
+        // One row per process
+        for (const std::string &proc : processNames) {
+            out << padLabel(proc);
+            for (const std::string &step : activeSteps) {
+                auto it = yieldMap[proc].find(step);
+                double y = 0, e = 0;
+                if (it != yieldMap[proc].end()) {
+                    y = it->second.yield;
+                    e = std::sqrt(it->second.err2);
+                }
+                out << padCol(fmtYE(y, e));
+            }
+            out << std::endl;
+        }
+
+        // BG Total row (MC Total - TTbar_Signal)
+        out << padLabel("BG Total");
+        for (const std::string &step : activeSteps) {
+            double y = bgTot[step].y;
+            double e = std::sqrt(bgTot[step].err2);
+            out << padCol(fmtYE(y, e));
+        }
+        out << std::endl;
+
+        // MC Total row
+        out << padLabel("MC Total");
+        for (const std::string &step : activeSteps) {
+            double y = mcTot[step].y;
+            double e = std::sqrt(mcTot[step].err2);
+            out << padCol(fmtYE(y, e));
+        }
+        out << std::endl;
+
+        // Data + Data/MC rows
+        if (!dataYE.empty()) {
+            out << padLabel("Data");
+            for (const std::string &step : activeSteps) {
+                auto dit = dataYE.find(step);
+                double y = 0, e = 0;
+                if (dit != dataYE.end()) { y = dit->second.yield; e = dit->second.err; }
+                out << padCol(fmtYE(y, e));
+            }
+            out << std::endl;
+
+            out << padLabel("Data/MC");
+            for (const std::string &step : activeSteps) {
+                auto dit = dataYE.find(step);
+                double dy = 0, de = 0;
+                if (dit != dataYE.end()) { dy = dit->second.yield; de = dit->second.err; }
+                double my = mcTot[step].y;
+                double me = std::sqrt(mcTot[step].err2);
+                out << padCol(fmtRatio(dy, de, my, me));
+            }
+            out << std::endl;
+        }
+
+        out << std::endl << std::endl;
+    };
+
     // ---------------------------------------------------------------
     // Section 1: Category Mode
-    // Rows = process/category, Columns = step
     // ---------------------------------------------------------------
-    out << "=== Event Yield Table (Category Mode) ===" << std::endl;
-    out << std::endl;
-
-    // Pre-compute MC total per step
-    std::map<std::string, double> mcTotalPerStep;
-    for (const std::string &step : activeSteps) {
-        double tot = 0;
-        for (const std::string &cat : orderedCats) {
-            auto it = catYield[cat].find(step);
-            if (it != catYield[cat].end()) tot += it->second;
-        }
-        mcTotalPerStep[step] = tot;
-    }
-
-    // Header row: Process | Step0 | Step1 | ...
-    out << padStr("Process");
-    for (const std::string &step : activeSteps) out << padStr(stepLabel(step));
-    out << std::endl;
-
-    out << std::string((activeSteps.size() + 1) * colW, '-') << std::endl;
-
-    // One row per category
-    for (const std::string &cat : orderedCats) {
-        out << padStr(cat);
-        for (const std::string &step : activeSteps) {
-            auto it = catYield[cat].find(step);
-            double v = (it != catYield[cat].end()) ? it->second : 0.0;
-            out << padStr(fmt(v));
-        }
-        out << std::endl;
-    }
-
-    // MC Total row
-    out << padStr("MC Total");
-    for (const std::string &step : activeSteps) out << padStr(fmt(mcTotalPerStep[step]));
-    out << std::endl;
-
-    // Data row
-    if (!dataYield.empty()) {
-        out << padStr("Data");
-        for (const std::string &step : activeSteps) {
-            auto dit = dataYield.find(step);
-            double dv = (dit != dataYield.end()) ? dit->second : 0.0;
-            out << padStr(fmt(dv));
-        }
-        out << std::endl;
-
-        // Data/MC row
-        out << padStr("Data/MC");
-        for (const std::string &step : activeSteps) {
-            auto dit = dataYield.find(step);
-            double dv  = (dit != dataYield.end()) ? dit->second : 0.0;
-            double mc  = mcTotalPerStep[step];
-            char rbuf[32]; snprintf(rbuf, sizeof(rbuf), "%.4f", (mc > 0) ? dv / mc : 0.0);
-            out << padStr(std::string(rbuf));
-        }
-        out << std::endl;
-    }
-
-    out << std::endl << std::endl;
+    printSection("Event Yield Table (Category Mode)", orderedCats, catYE);
 
     // ---------------------------------------------------------------
     // Section 2: Individual Sample Mode
-    // Rows = sample, Columns = step
     // ---------------------------------------------------------------
-    out << "=== Event Yield Table (Individual Sample Mode) ===" << std::endl;
-    out << std::endl;
+    printSection("Event Yield Table (Individual Sample Mode)", orderedSamples, smpYE);
 
-    // Pre-compute MC total per step
-    std::map<std::string, double> mcTotalPerStepSmp;
-    for (const std::string &step : activeSteps) {
-        double tot = 0;
-        for (const std::string &smp : orderedSamples) {
-            auto it = smpYield[smp].find(step);
-            if (it != smpYield[smp].end()) tot += it->second;
-        }
-        mcTotalPerStepSmp[step] = tot;
-    }
-
-    // Header row
-    out << padStr("Process");
-    for (const std::string &step : activeSteps) out << padStr(stepLabel(step));
-    out << std::endl;
-
-    out << std::string((activeSteps.size() + 1) * colW, '-') << std::endl;
-
-    // One row per sample
-    for (const std::string &smp : orderedSamples) {
-        out << padStr(smp);
-        for (const std::string &step : activeSteps) {
-            auto it = smpYield[smp].find(step);
-            double v = (it != smpYield[smp].end()) ? it->second : 0.0;
-            out << padStr(fmt(v));
-        }
-        out << std::endl;
-    }
-
-    // MC Total row
-    out << padStr("MC Total");
-    for (const std::string &step : activeSteps) out << padStr(fmt(mcTotalPerStepSmp[step]));
-    out << std::endl;
-
-    // Data row
-    if (!dataYield.empty()) {
-        out << padStr("Data");
-        for (const std::string &step : activeSteps) {
-            auto dit = dataYield.find(step);
-            double dv = (dit != dataYield.end()) ? dit->second : 0.0;
-            out << padStr(fmt(dv));
-        }
-        out << std::endl;
-
-        // Data/MC row
-        out << padStr("Data/MC");
-        for (const std::string &step : activeSteps) {
-            auto dit = dataYield.find(step);
-            double dv  = (dit != dataYield.end()) ? dit->second : 0.0;
-            double mc  = mcTotalPerStepSmp[step];
-            char rbuf[32]; snprintf(rbuf, sizeof(rbuf), "%.4f", (mc > 0) ? dv / mc : 0.0);
-            out << padStr(std::string(rbuf));
-        }
-        out << std::endl;
-    }
-
-    out << std::endl;
     out.close();
     std::cout << "EventYield.txt written to: " << yieldPath << std::endl;
 }
@@ -625,6 +651,30 @@ std::string getChannelLabel(const std::string &channel) {
     if (channel == "MuEl")     return "#mu^{#pm}e^{#mp} channel";
     if (channel == "Dilepton") return "l^{+}l^{-} channel";
     return channel;
+}
+
+// Progress bar utility
+// Prints:  [tag] [████████░░░░░░░░] 50% (current/total) label
+void printProgress(const std::string &tag, int current, int total, const std::string &label = "") {
+    if (total <= 0) return;
+    const int barWidth = 30;
+    double frac = static_cast<double>(current) / total;
+    int filled  = static_cast<int>(frac * barWidth);
+
+    std::string bar;
+    for (int i = 0; i < barWidth; ++i) bar += (i < filled ? "\u2588" : "\u2591");
+
+    int pct = static_cast<int>(frac * 100);
+    std::string msg = "[" + tag + "] [" + bar + "] "
+                    + std::to_string(pct) + "% ("
+                    + std::to_string(current) + "/" + std::to_string(total) + ")";
+    if (!label.empty()) msg += "  " + label;
+
+    // Pad to 100 chars so previous longer lines are fully overwritten
+    if ((int)msg.size() < 100) msg += std::string(100 - msg.size(), ' ');
+
+    std::cout << "\r" << msg << std::flush;
+    if (current == total) std::cout << std::endl;  // newline when done
 }
 
 // Split a comma-separated string into tokens
@@ -684,20 +734,30 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
             continue;
         }
 
+        // Pre-count files for progress bar
+        std::vector<std::string> fileLines;
         std::string line;
         while (std::getline(fileList, line)) {
             if (line.empty() || line[0] == '#') continue;
-            std::cout << "  line: " << line << std::endl;
+            fileLines.push_back(line);
+        }
+        fileList.close();
+
+        int nFiles = static_cast<int>(fileLines.size());
+        int fileIdx = 0;
+        std::cout << "[Loading] " << listFile << " (" << nFiles << " files)" << std::endl;
+
+        for (const std::string &line : fileLines) {
+            ++fileIdx;
+            std::string sampleName = line.substr(line.find_last_of('/') + 1);
+            sampleName = sampleName.substr(0, sampleName.find_first_of('.'));
+            printProgress("Loading", fileIdx, nFiles, sampleName);
 
             TFile inputFile(line.c_str(), "READ");
             if (!inputFile.IsOpen()) {
-                std::cerr << "Error: Could not open file " << line << std::endl;
+                std::cerr << "\n[Loading] Error: Could not open file " << line << std::endl;
                 continue;
             }
-
-            std::string sampleName = line.substr(line.find_last_of('/') + 1);
-            sampleName = sampleName.substr(0, sampleName.find_first_of('.'));
-            std::cout << "  sampleName: " << sampleName << std::endl;
 
             TIter next(inputFile.GetListOfKeys());
             TKey *key;
@@ -757,13 +817,9 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
         for (const auto &samplePair : histograms) {
             const std::string &sampleName = samplePair.first;
             std::string category = getCategoryName(sampleName);
-            
-            std::cout << "Sample: " << sampleName << " -> Category: " << category << std::endl;
-            
             for (const auto &histPair : samplePair.second) {
                 const std::string &histName = histPair.first;
                 TH1* hist = histPair.second.get();
-                // Scale already applied at load time
                 if (categoryHistograms[category].find(histName) == categoryHistograms[category].end()) {
                     categoryHistograms[category][histName].reset((TH1*)hist->Clone());
                 } else {
@@ -771,7 +827,13 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
                 }
             }
         }
+
+        int nHists  = static_cast<int>(categoryHistograms.begin()->second.size());
+        int histIdx = 0;
+        std::cout << "[Plotting] Category mode: " << nHists << " histograms" << std::endl;
+
         for (const auto &histPair : categoryHistograms.begin()->second) {
+            ++histIdx;
             TCanvas canvas("canvas", "Histogram Stacks", 1200, 1200);
             canvas.cd();
             
@@ -940,6 +1002,7 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
             }
             
             savePlotsWithBothScales(canvas, pad1, outputDir, histName, mcSum, maxY);
+            printProgress("Plotting", histIdx, nHists, histName);
             
             canvas.Clear();
             delete ratioHist;
@@ -947,9 +1010,12 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
         }
     }
     else {
-        std::cout << "=== Processing in Individual Sample Mode ===" << std::endl;
-        
+        int nHistsIndv  = static_cast<int>(histograms.begin()->second.size());
+        int histIdxIndv = 0;
+        std::cout << "[Plotting] Individual mode: " << nHistsIndv << " histograms" << std::endl;
+
         for (const auto &histPair : histograms.begin()->second) {
+            ++histIdxIndv;
             TCanvas canvas("canvas", "Histogram Stacks", 1200, 1200);
             canvas.cd();
             
@@ -1126,6 +1192,7 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
             }
             
             savePlotsWithBothScales(canvas, pad1, outputDir, histName, mcSum, maxY);
+            printProgress("Plotting", histIdxIndv, nHistsIndv, histName);
             
             canvas.Clear();
             delete ratioHist;
@@ -1133,6 +1200,7 @@ void StackAndOverlayHistograms(const std::string &inputFileList, const std::stri
         }
     }
     integralFile.close();
+    std::cout << "[Done] Output: Histograms/" << outputDir << "/" << std::endl;
 }
 
 int main(int argc, char *argv[]) {
